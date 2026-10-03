@@ -1,63 +1,76 @@
-import { streamText, type ModelMessage } from 'ai';
+import {
+  streamText,
+  tool,
+  type ModelMessage,
+  type LanguageModel,
+  type Tool,
+} from 'ai';
+import stream from 'stream';
 
-const MAX_STEPS = 10;
+const MAX_STEP = 10;
 
-export async function agentLoop(
-    model: any,
-    tools: any,
-    messages: ModelMessage[],
-    system: string,
-) {
-    let step = 0;
+export const agentLoop = async ({
+  model,
+  instructions,
+  messages,
+  tools,
+}: {
+  model: LanguageModel;
+  instructions: string;
+  messages: ModelMessage[];
+  tools: Record<string, Tool>;
+}) => {
+  let currentStep = 0;
 
-    while (step < MAX_STEPS) {
-        step++;
-        console.log(`\n--- Step ${step} ---`);
+  while (currentStep < MAX_STEP) {
+    currentStep++;
+    console.log(`当前轮次：${currentStep}`);
 
-        const result = streamText({
-            model,
-            system,
-            tools,
-            messages,
-            // 不设 stopWhen，每次只跑一步
-        });
+    process.stdout.write('\nAssistant: ');
+    const result = streamText({
+      model,
+      instructions,
+      messages,
+      tools,
+    });
 
-        let hasToolCall = false;
-        let fullText = '';
+    let fullText = '';
+    let hasToolCalled = false;
 
-        for await (const part of result.stream) {
-            switch (part.type) {
-                case 'text-delta':
-                    process.stdout.write(part.text);
-                    fullText += part.text;
-                    break;
-
-                case 'tool-call':
-                    hasToolCall = true;
-                    console.log(`  [调用: ${part.toolName}(${JSON.stringify(part.input)})]`);
-                    break;
-
-                case 'tool-result':
-                    console.log(`  [结果: ${JSON.stringify(part.output)}]`);
-                    break;
-            }
-        }
-
-        // 拿到这一步的完整结果，追加到消息历史
-        const stepMessages = await result.responseMessages;
-        messages.push(...stepMessages);
-
-        // 退出条件：模型没有调用任何工具，说明它认为可以直接回复了
-        if (!hasToolCall) {
-            if (fullText) console.log();
-            break;
-        }
-
-        // 还有工具调用 → 继续循环，让模型看到工具结果后继续思考
-        console.log('  → 模型还在工作，继续下一步...');
+    for await (const part of result.stream) {
+      switch (part.type) {
+        case 'text-delta':
+          process.stdout.write(part.text);
+          fullText += part.text;
+          break;
+        case 'tool-call':
+          hasToolCalled = true;
+          console.log(
+            `调用工具 ${part.toolName}(${JSON.stringify(part.input)})`,
+          );
+          break;
+        case 'tool-result':
+          console.log(
+            `调用工具结果 ${part.toolName}(${JSON.stringify(part.output)})`,
+          );
+          break;
+      }
     }
 
-    if (step >= MAX_STEPS) {
-        console.log('\n[达到最大步数限制，强制停止]');
+    // 当前step处理完，处理消息历史
+    const msgs = await result.responseMessages;
+    messages.push(...msgs);
+
+    if (!hasToolCalled) {
+      // 没有工具需要继续调用，结束当前轮次（loop）
+      if (fullText) console.log();
+      break;
     }
-}
+
+    console.log('\n 任务未完成，继续处理下一个step');
+  }
+
+  if (currentStep >= MAX_STEP) {
+    console.log('\n[达到最大步数限制，强制停止]');
+  }
+};

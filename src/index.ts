@@ -1,105 +1,130 @@
 import 'dotenv/config';
-import { streamText, stepCountIs, type ModelMessage } from 'ai';
-import { weatherTool, calculatorTool } from './tools/utility-tools'
+import {
+  generateText,
+  streamText,
+  stepCountIs,
+  tool,
+  type ModelMessage,
+  type Tool,
+} from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { createMockModel } from './mock-model';
-import { createInterface } from 'node:readline'
-import { agentLoop } from './agent/loop'
+import { createInterface } from 'node:readline/promises';
+import { weatherTool, calculatorTool } from './tools/utility-tools';
+import { agentLoop } from './agent/loop';
 
-const qwen = createOpenAI({
-  baseURL: 'https://wzw.pp.ua/v1',
-  apiKey: process.env.DASHSCOPE_API_KEY,
+const provider = createOpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.PROVIDER_API_KEY,
 });
 
-const tools = { get_weather: weatherTool, calculator: calculatorTool }
+const model = provider.chat('deepseek-flash');
 
-const model = process.env.DASHSCOPE_API_KEY
-  ? qwen.chat('qwen3.8-flash')
-  : createMockModel();
+async function main() {
+  // const result = await generateText({
+  //   model,
+  //   prompt: '用一句话描述你自己',
+  // });
+  // console.log(result.text);
+  // console.log(result.output);
+
+  const result = streamText({
+    model,
+    prompt: '用一句话描述你自己',
+  });
+
+  for await (const chunk of result.textStream) {
+    process.stdout.write(chunk);
+  }
+}
+
+// main();
 
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout,
-})
+});
 
-const messages: ModelMessage[] = []
+const messages: ModelMessage[] = [];
 
-// function ask() {
-//   rl.question('\nYou：', async input => {
-//     const trimmed = input.trim()
-//     if (!trimmed || trimmed === 'exit') {
-//       console.log('Bye!')
-//       rl.close()
-//       return
-//     }
+const instructions =
+  '你是 Super Agent，一个专注于软件开发的 AI 助手。你说话简洁直接，喜欢用代码示例来解释问题。如果用户的问题不够清晰，你会反问而不是瞎猜。';
 
-//     messages.push({ role: 'user', content: trimmed })
+const tools: Record<string, Tool> = {
+  weatherTool,
+  calculatorTool,
+};
 
-//     const result = streamText({
-//       model,
-//       tools,
-//       messages,
-//       stopWhen: stepCountIs(5),
-//       system: `你是 Super Agent，一个专注于软件开发的 AI 助手。
-//               你说话简洁直接，喜欢用代码示例来解释问题。
-//               如果用户的问题不够清晰，你会反问而不是瞎猜。`,
-//     })
+async function ask() {
+  while (true) {
+    // 用户输入开始：
+    const input = await rl.question('\nYou: ');
+    const trimed = input.trim();
 
-//     process.stdout.write('Assistant: ')
-//     for await (const part of result.stream) {
-//       switch (part.type) {
-//         case 'text-delta':
-//           process.stdout.write(part.text)
-//           break
-//         case 'tool-call':
-//           console.log(`\n  [调用工具: ${part.toolName}(${JSON.stringify(part.input)})]`);
-//           break;
-//         case 'tool-result':
-//           console.log(`  [工具返回: ${JSON.stringify(part.output)}]`);
-//           break;
-//         case 'tool-error':
-//           console.log(`  [工具报错: ${part.toolName} -> ${String(part.error)}]`);
-//           break;
-//         case 'error':
-//           console.error(`\n  [对话出错: ${String(part.error)}]`);
-//           break;
-//       }
-//     }
-//     console.log()
-
-//     // 把所有 step 生成的 assistant / tool 消息原样写回历史，
-//     // 下一轮模型才能看到完整的工具调用与返回结果。
-//     messages.push(...await result.responseMessages)
-
-//     ask()
-
-//   })
-// }
-
-// console.log('Super Agent v0.1 (type "exit" to quit)\n');
-// ask();
-
-
-const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
-需要查询信息时，主动使用工具，不要编造数据。
-回答要简洁直接。`;
-
-function ask() {
-  rl.question('\nYou: ', async (input) => {
-    const trimmed = input.trim();
-    if (!trimmed || trimmed === 'exit') {
+    if (!input || input === 'exit') {
       console.log('Bye!');
       rl.close();
-      return;
+      break;
     }
 
-    messages.push({ role: 'user', content: trimmed });
+    messages.push({ role: 'user', content: trimed });
+    // 用户输入结束
 
-    await agentLoop(model, tools, messages, SYSTEM);
+    const result = streamText({
+      model,
+      instructions,
+      messages,
+      tools,
+      stopWhen: stepCountIs(5),
+    });
 
-    ask();
-  });
+    // 助手回复开始
+    // process.stdout.write('\nAssistant: ');
+    // let fullResponse = '';
+
+    // 纯文本
+    // for await (const chunk of result.textStream) {
+    //   // 打字机输出
+    //   process.stdout.write(chunk);
+    //   fullResponse += chunk;
+    // }
+
+    // 包含工具的消息流
+    // for await (const part of result.stream) {
+    //   switch (part.type) {
+    //     case 'text-delta':
+    //       // 文本片段（跟textStream一样）
+    //       process.stdout.write(part.text);
+    //       break;
+    //     case 'tool-call':
+    //       // 模型决定调用某个工具，包含工具名和参数
+    //       console.log(
+    //         `调用工具id:${part.toolCallId}, 工具名 ${part.toolName}, input: ${JSON.stringify(part.input)}`,
+    //       );
+    //       break;
+    //     case 'tool-result':
+    //       // 工具执行完毕，包含返回值
+    //       console.log(
+    //         `调用工具id:${part.toolCallId}, 工具名 ${part.toolName}, output: ${JSON.stringify(part.output)}`,
+    //       );
+    //       break;
+    //     case 'start-step':
+    //       console.log(`step-start: ${JSON.stringify(part.request)}`);
+    //       break;
+    //     case 'finish-step':
+    //       console.log(`step finish: ${JSON.stringify(part.response)}`);
+    //       break;
+    //     case 'finish':
+    //       console.log('all step finish');
+    //       break;
+    //   }
+    // }
+
+    // 将助手（LLM）的回复记录到messages消息记录
+    // messages.push({ role: 'assistant', content: fullResponse });
+
+    await agentLoop({ model, messages, instructions, tools });
+  }
 }
 
-console.log('Super Agent v0.2 — Agent Loop (type "exit" to quit)\n');
+console.log('Super Agent type "exit" to quit \n');
 ask();
